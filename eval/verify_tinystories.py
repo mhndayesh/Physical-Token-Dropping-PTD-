@@ -2,16 +2,25 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC_DIR = os.path.join(ROOT, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
 from transformer_0_5b import SparseTransformer05B, Config
 import time
 import math
 import pandas as pd
-import os
 
 class TinyStoriesDataset(Dataset):
     def __init__(self, data_path, num_samples=1000):
         if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Data not found at {data_path}. Please run prepare_data.py.")
+            raise FileNotFoundError(
+                f"Data not found at {data_path}. Run: python prepare_data.py --output {data_path}"
+            )
         full_data = torch.load(data_path)
         self.data = full_data[:num_samples] # Use a subset for fast POC
     def __len__(self):

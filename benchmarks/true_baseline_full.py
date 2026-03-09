@@ -3,10 +3,16 @@ Full benchmark: All sparsity levels vs TRUE nn.TransformerEncoder baseline.
 Each config in a separate subprocess for clean GPU state.
 """
 import subprocess, sys, json
+import os
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC_DIR = os.path.join(ROOT, "src")
 
 def bench_single(config_json):
     code = f"""
 import torch, torch.nn as nn, time, json
+import sys
+sys.path.insert(0, r'{SRC_DIR}')
 cfg = json.loads('{config_json}')
 
 if cfg['type'] == 'true_dense':
@@ -45,7 +51,7 @@ print(f'{{vram:.0f}}|{{lat:.1f}}|{{params:.1f}}')
 """
     try:
         r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                          timeout=120, cwd=r"c:\udgrade_project_y")
+                          timeout=120, cwd=ROOT)
         if r.returncode == 0:
             parts = r.stdout.strip().split('\n')[-1].split('|')
             return float(parts[0]), float(parts[1]), float(parts[2])

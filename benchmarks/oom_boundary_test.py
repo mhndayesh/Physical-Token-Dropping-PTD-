@@ -3,11 +3,17 @@ OOM Boundary Test — runs each seq_len in a SEPARATE subprocess
 so each test gets a fully clean GPU.
 """
 import subprocess, sys, json
+import os
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC_DIR = os.path.join(ROOT, "src")
 
 def test_single(seq_len, sparsity, layers=12):
     """Run a single forward+backward in a subprocess, return peak VRAM or 'OOM'."""
     code = f"""
 import torch, gc
+import sys
+sys.path.insert(0, r'{SRC_DIR}')
 from transformer_0_5b import SparseTransformer05B, Config
 cfg = Config()
 cfg.sparsity = {sparsity}
