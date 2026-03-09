@@ -25,6 +25,7 @@ This repository contains five main documents that explain, prove, and validate t
 3. 🧮 **[MATHEMATICAL_PROOFS.md](docs/MATHEMATICAL_PROOFS.md)** — *The Math Behind 'Smarter, Not Bigger'.* The formal proofs showing *why* memory gets cheaper linearly, attention gets cheaper quadratically, and where theory diverges from reality.
 4. 🚶 **[WALKTHROUGH.md](docs/WALKTHROUGH.md)** — *Smarter, Not Bigger — How We Got Here.* The project story: the idea, the technical review that found bugs, the fixes, and the final scientific validations.
 5. 🧪 **[TRAINING_RECIPE.md](docs/TRAINING_RECIPE.md)** — *How to Scale PTD.* A dedicated 3-phase training recipe (Teacher Distillation + Curriculum Sparsity + Mixed Data) designed specifically to handle the architectural shock of physical token dropping.
+6. 📈 **[SCALABILITY.md](docs/SCALABILITY.md)** — *Honest Estimations at Scale.* A realistic look at how speed, VRAM, and accuracy will trade off when scaling PTD up to 7B+ parameters on long contexts.
 
 ## 💻 Source Code (`/src`)
 
@@ -48,7 +49,5 @@ All claims in the documentation are backed by these empirical validation scripts
 ---
 
 ## ⚠️ Notes
-
-This POC was externally validated via `docs/SparseQwen_Technical_Review.docx`. All current empirical results are post-bug-fix and compare against a genuine `nn.TransformerEncoder` (meaning all router overhead is accounted for in the speedups).
 
 > **A Final Note:** This is the work of an individual. While mathematically and scientifically rigorous tests have been conducted, there may still be mistakes, conflicts, or unoptimized edge cases that I have not caught. I appreciate and welcome all critiques, corrections, and contributions to help scale this concept further.
