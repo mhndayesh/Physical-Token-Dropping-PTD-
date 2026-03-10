@@ -16,6 +16,7 @@ Practical tricks used
 - Selection mask is tracked for selected-token loss and evaluation.
 - Gate-usage regularization in Phase 2 to match keep-rate.
 - Router entropy is logged to monitor how deterministic routing becomes.
+- Optional router diversity loss encourages query specialization.
 
 Stability choices
 - Block-level routing (block_size) reduces router frequency.

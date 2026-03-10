@@ -28,3 +28,6 @@ ptd_poc/docs/
 - WALKTHROUGH.md : project narrative
 - SCALABILITY.md : scaling discussion
 - MATHEMATICAL_PROOFS.md : theoretical background
+
+FINAL_ENG_DOCS/
+- ROADMAP.md : suggested next steps and research ideas

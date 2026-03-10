@@ -22,6 +22,18 @@ python -m actual_ptd.train_phase2 \
   --lr 1e-4
 ```
 
+Phase 2 with diversity loss (example)
+
+```bash
+python -m actual_ptd.train_phase2 \
+  --model Qwen/Qwen2.5-0.5B \
+  --data data/tinystories_packed_qwen.pt \
+  --steps 3000 \
+  --batch 4 \
+  --lr 1e-4 \
+  --diversity-reg 0.1
+```
+
 Phase 3 (curriculum sparsity)
 
 ```bash
@@ -46,6 +58,20 @@ python -m actual_ptd.train_phase3 \
   --schedule 0.99,0.9,0.7,0.5,0.3 \
   --coverage-window 4 \
   --coverage-weight 0.1
+```
+
+Phase 3 with loss-plateau early stop (example)
+
+```bash
+python -m actual_ptd.train_phase3 \
+  --model Qwen/Qwen2.5-0.5B \
+  --data data/tinystories_packed_qwen.pt \
+  --router-ckpt checkpoints/ptd_v2_phase2_step003000.pt \
+  --batch 2 \
+  --lr 1e-5 \
+  --schedule 0.99,0.9,0.7,0.5,0.3 \
+  --early-stop-window 200 \
+  --early-stop-delta 0.0005
 ```
 
 Eval: keep 70 percent

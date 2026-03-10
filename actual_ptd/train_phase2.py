@@ -39,6 +39,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="target mean gate value for regularization (default: keep-rate)",
     )
+    p.add_argument(
+        "--diversity-reg",
+        type=float,
+        default=0.0,
+        help="weight for router query diversity loss (0 disables)",
+    )
     p.add_argument("--save-full-model", action="store_true")
     return p.parse_args()
 
@@ -62,6 +68,17 @@ def kl_distill(
     kl = F.kl_div(s_log_prob, t_prob, reduction="none").sum(dim=-1)
     kl = (kl * attn_mask.float()).sum() / attn_mask.float().sum().clamp_min(1.0)
     return kl * (temperature ** 2)
+
+
+def diversity_loss(queries: torch.Tensor) -> torch.Tensor:
+    # Encourage query vectors to be orthogonal (low cosine similarity).
+    if queries.numel() == 0:
+        return torch.zeros((), device=queries.device, dtype=queries.dtype)
+    q = F.normalize(queries.float(), dim=-1)
+    sim = q @ q.transpose(0, 1)
+    eye = torch.eye(sim.size(0), device=sim.device, dtype=sim.dtype)
+    off_diag = sim * (1.0 - eye)
+    return (off_diag ** 2).mean()
 
 
 def main() -> None:
@@ -103,6 +120,7 @@ def main() -> None:
     losses = []
     losses_kl = []
     losses_reg = []
+    losses_div = []
     t0 = time.time()
     for step in range(1, args.steps + 1):
         inp, attn = get_batch(data, args.batch, device)
@@ -117,7 +135,11 @@ def main() -> None:
             loss_reg = ((aux["gate_means"] - target_gate) ** 2).mean()
         else:
             loss_reg = torch.zeros((), device=device, dtype=loss_kl.dtype)
-        loss = loss_kl + args.sparsity_reg * loss_reg
+        if args.diversity_reg > 0:
+            loss_div = diversity_loss(student.routers[0].queries)
+        else:
+            loss_div = torch.zeros((), device=device, dtype=loss_kl.dtype)
+        loss = loss_kl + args.sparsity_reg * loss_reg + args.diversity_reg * loss_div
 
         optimizer.zero_grad()
         loss.backward()
@@ -127,13 +149,15 @@ def main() -> None:
         losses.append(loss.item())
         losses_kl.append(loss_kl.item())
         losses_reg.append(loss_reg.item())
+        losses_div.append(loss_div.item())
         if step % args.log_every == 0:
             avg = sum(losses[-args.log_every:]) / args.log_every
             avg_kl = sum(losses_kl[-args.log_every:]) / args.log_every
             avg_reg = sum(losses_reg[-args.log_every:]) / args.log_every
+            avg_div = sum(losses_div[-args.log_every:]) / args.log_every
             print(
                 f"step {step:>6d}/{args.steps} | loss {avg:.4f} | kl {avg_kl:.4f} | "
-                f"reg {avg_reg:.4f} | {time.time() - t0:.1f}s"
+                f"reg {avg_reg:.4f} | div {avg_div:.4f} | {time.time() - t0:.1f}s"
             )
 
         if step % args.save_every == 0 or step == args.steps:
@@ -145,6 +169,7 @@ def main() -> None:
                 "loss": losses[-1],
                 "loss_kl": losses_kl[-1],
                 "loss_reg": losses_reg[-1],
+                "loss_div": losses_div[-1],
             }
             if args.save_full_model:
                 ckpt["model_state"] = student.state_dict()

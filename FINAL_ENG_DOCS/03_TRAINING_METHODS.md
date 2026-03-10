@@ -22,6 +22,7 @@ Loss used
 Notes
 - Soft gating is default (ste_gating=False). This allows dense gradient signal.
 - gate-usage regularization helps prevent pass-all collapse.
+- Optional diversity loss can be applied to router queries to encourage specialization.
 
 Phase 3: Curriculum sparsity (full model)
 Goal
@@ -44,6 +45,10 @@ Optional coverage penalty
 - coverage_penalty is computed from segment selection per block.
 - It penalizes windows with zero selected segments.
 - Controlled by --coverage-window and --coverage-weight in train_phase3.py.
+
+Optional early-stop per stage
+- Enabled by --early-stop-window and --early-stop-delta.
+- If selected-loss plateaus between two windows, the stage ends early.
 
 Data
 - Current POC uses data/tinystories_packed_qwen.pt (TinyStories packed).

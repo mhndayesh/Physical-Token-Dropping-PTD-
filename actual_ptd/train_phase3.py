@@ -41,6 +41,18 @@ def parse_args() -> argparse.Namespace:
         help="weight for coverage penalty (0 disables)",
     )
     p.add_argument(
+        "--early-stop-window",
+        type=int,
+        default=0,
+        help="window size for loss-plateau early stop per stage (0 disables)",
+    )
+    p.add_argument(
+        "--early-stop-delta",
+        type=float,
+        default=0.0,
+        help="min change between windows to keep training (0 disables)",
+    )
+    p.add_argument(
         "--mask-loss",
         dest="mask_loss",
         action="store_true",
@@ -238,6 +250,18 @@ def main() -> None:
                     f"cov {avg_cov:.4f} | ent {avg_ent:.4f} | "
                     f"elapsed {elapsed:.1f}s | keep {keep_rate:.0%}"
                 )
+
+            if args.early_stop_window > 0 and args.early_stop_delta > 0:
+                w = args.early_stop_window
+                if len(losses_sel) >= 2 * w:
+                    prev = sum(losses_sel[-2 * w : -w]) / w
+                    recent = sum(losses_sel[-w:]) / w
+                    if abs(recent - prev) <= args.early_stop_delta:
+                        print(
+                            f"  early stop at step {step}: sel loss change "
+                            f"{abs(recent - prev):.6f} <= {args.early_stop_delta}"
+                        )
+                        break
 
             if global_step % args.save_every == 0:
                 path = f"checkpoints/ptd_v2_phase3_step{global_step:06d}.pt"

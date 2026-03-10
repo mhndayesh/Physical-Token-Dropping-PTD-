@@ -57,16 +57,22 @@ def ppl_ptd(
     n_seq: int,
     device: torch.device,
     mask_loss: bool,
-) -> float:
+) -> tuple[float, float | None, float | None]:
     model.eval()
     total_loss = 0.0
     total_toks = 0
+    keep_fracs = []
+    entropies = []
     with torch.no_grad():
         for i in range(min(n_seq, data.shape[0])):
             x = data[i : i + 1].to(device)
             inp, tgt = x[:, :-1], x[:, 1:]
             attn = torch.ones_like(inp, dtype=torch.bool)
             out, aux = model.forward_with_aux(input_ids=inp, attention_mask=attn)
+            if aux.get("segment_selection") is not None and aux["segment_selection"].numel() > 0:
+                keep_fracs.append(aux["segment_selection"].float().mean().item())
+            if aux.get("router_entropy") is not None and aux["router_entropy"].numel() > 0:
+                entropies.append(aux["router_entropy"].float().mean().item())
             logits = out.logits
             if mask_loss:
                 mask = aux["selection_mask"] & aux["token_mask"]
@@ -81,7 +87,10 @@ def ppl_ptd(
                 loss = F.cross_entropy(logits.view(-1, logits.size(-1)), tgt.reshape(-1), reduction="sum")
                 total_loss += loss.item()
                 total_toks += tgt.numel()
-    return math.exp(total_loss / max(total_toks, 1))
+    ppl = math.exp(total_loss / max(total_toks, 1))
+    keep_mean = sum(keep_fracs) / len(keep_fracs) if keep_fracs else None
+    ent_mean = sum(entropies) / len(entropies) if entropies else None
+    return ppl, keep_mean, ent_mean
 
 
 def main() -> None:
@@ -110,12 +119,16 @@ def main() -> None:
             sparse.routers.load_state_dict(ckpt["router_state"], strict=True)
 
     dense_ppl = ppl_dense(dense, data, args.n_seq, device)
-    sparse_ppl = ppl_ptd(sparse, data, args.n_seq, device, args.mask_loss)
+    sparse_ppl, keep_mean, ent_mean = ppl_ptd(sparse, data, args.n_seq, device, args.mask_loss)
     delta = (sparse_ppl - dense_ppl) / dense_ppl * 100
 
     print(f"Dense PPL : {dense_ppl:.3f}")
     print(f"Sparse PPL: {sparse_ppl:.3f}")
     print(f"Delta     : {delta:+.2f}%")
+    if keep_mean is not None:
+        print(f"Avg keep fraction: {keep_mean:.3f}")
+    if ent_mean is not None:
+        print(f"Avg router entropy: {ent_mean:.3f}")
 
 
 if __name__ == "__main__":
