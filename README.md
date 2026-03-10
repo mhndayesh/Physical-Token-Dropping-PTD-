@@ -41,6 +41,23 @@ python benchmarks/oom_boundary_test.py
 python benchmarks/true_baseline_full.py
 ```
 
+## PTD Qwen2.5-0.5B POC
+
+This repo now includes the PTD runtime code and links to a trained checkpoint.
+
+- Runtime: `actual_ptd/`
+- Checkpoint + results: `ptd_models/README.md`
+
+Quick eval:
+
+```bash
+python -m actual_ptd.eval_perplexity \
+  --model Qwen/Qwen2.5-0.5B \
+  --data data/tinystories_packed_qwen.pt \
+  --checkpoint ptd_v2_phase3_stage4_keep50.pt \
+  --keep-rate 0.5
+```
+
 ## Notes
 
 - Import paths in scripts are now root-safe (`src/` is auto-added).
@@ -55,3 +72,4 @@ python benchmarks/true_baseline_full.py
 - [WALKTHROUGH](docs/WALKTHROUGH.md)
 - [TRAINING_RECIPE](docs/TRAINING_RECIPE.md)
 - [SCALABILITY](docs/SCALABILITY.md)
+- [PTD_QWEN_POC](docs/PTD_QWEN_POC.md)
