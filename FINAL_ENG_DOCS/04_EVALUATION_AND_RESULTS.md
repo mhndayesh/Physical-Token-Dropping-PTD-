@@ -31,3 +31,26 @@ Lower PPL is better. As keep-rate decreases, accuracy drops because the model us
 Relevant code
 - actual_ptd/eval_perplexity.py
 - PTD_SCOREBOARD.md (root)
+
+Cache-mode comparison (dense vs PTD keep=70)
+Model: Qwen2.5-0.5B
+Script: actual_ptd/eval_cache_compare.py
+
+4K context
+| Metric | Dense | PTD 70% | PTD vs Dense |
+| --- | ---: | ---: | ---: |
+| PPL | 12.686 | 12.904 | +1.72% |
+| Accuracy | 42.86% | 42.86% | 0.00 points |
+| Total time | 1.262s | 0.702s | 44.38% less |
+| Peak VRAM | 3179.56 MB | 1141.95 MB | 64.09% less |
+
+8K context
+| Metric | Dense | PTD 70% | PTD vs Dense |
+| --- | ---: | ---: | ---: |
+| PPL | 13.184 | 13.468 | +2.16% |
+| Accuracy | 47.62% | 42.86% | -4.76 points |
+| Total time | 2.949s | 0.822s | 72.11% less |
+| Peak VRAM | 9535.77 MB | 1377.26 MB | 85.56% less |
+
+Detailed report
+- FINAL_ENG_DOCS/CACHE_COMPARE_REPORT_2026-03-10.md

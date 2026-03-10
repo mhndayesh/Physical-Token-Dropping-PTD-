@@ -24,6 +24,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--block-size", type=int, default=6)
     p.add_argument("--segment-size", type=int, default=16)
     p.add_argument("--keep-rate", type=float, default=0.3)
+    p.add_argument("--router-type", default="mq", choices=["mq", "transformer"])
+    p.add_argument("--router-rank", type=int, default=16)
+    p.add_argument("--router-queries", type=int, default=8)
+    p.add_argument("--router-dim", type=int, default=128)
+    p.add_argument("--router-heads", type=int, default=2)
+    p.add_argument("--router-layers", type=int, default=1)
     p.add_argument("--save-every", type=int, default=500)
     p.add_argument("--log-every", type=int, default=50)
     p.add_argument("--ste-gating", action="store_true", help="use identity-STE gate instead of soft gate")
@@ -44,6 +50,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="weight for router query diversity loss (0 disables)",
+    )
+    p.add_argument(
+        "--block-distill-weight",
+        type=float,
+        default=0.0,
+        help="weight for block-level hidden-state distillation (0 disables)",
     )
     p.add_argument("--save-full-model", action="store_true")
     return p.parse_args()
@@ -81,6 +93,23 @@ def diversity_loss(queries: torch.Tensor) -> torch.Tensor:
     return (off_diag ** 2).mean()
 
 
+def router_diversity_loss(routers: Iterable[nn.Module]) -> torch.Tensor:
+    losses = []
+    router_list = list(routers)
+    for router in router_list:
+        if hasattr(router, "queries"):
+            q = getattr(router, "queries")
+            if isinstance(q, torch.Tensor):
+                losses.append(diversity_loss(q))
+    if not losses:
+        try:
+            dev = next(router_list[0].parameters()).device
+        except Exception:
+            dev = torch.device("cpu")
+        return torch.zeros((), device=dev)
+    return sum(losses) / len(losses)
+
+
 def main() -> None:
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -97,6 +126,12 @@ def main() -> None:
         block_size=args.block_size,
         segment_size=args.segment_size,
         keep_rate=args.keep_rate,
+        router_type=args.router_type,
+        router_rank=args.router_rank,
+        router_queries=args.router_queries,
+        router_dim=args.router_dim,
+        router_heads=args.router_heads,
+        router_layers=args.router_layers,
         drop_tokens=False,  # phase 2: no physical token deletion
         ste_gating=args.ste_gating,
     )
@@ -121,14 +156,18 @@ def main() -> None:
     losses_kl = []
     losses_reg = []
     losses_div = []
+    losses_block = []
     t0 = time.time()
     for step in range(1, args.steps + 1):
         inp, attn = get_batch(data, args.batch, device)
 
         with torch.no_grad():
-            t_logits = teacher(input_ids=inp, attention_mask=attn).logits
+            t_out = teacher(input_ids=inp, attention_mask=attn, output_hidden_states=args.block_distill_weight > 0)
+            t_logits = t_out.logits
 
-        s_out, aux = student.forward_with_aux(input_ids=inp, attention_mask=attn)
+        s_out, aux = student.forward_with_aux(
+            input_ids=inp, attention_mask=attn, return_block_hidden=args.block_distill_weight > 0
+        )
         loss_kl = kl_distill(s_out.logits, t_logits, attn, args.temperature)
         target_gate = args.keep_rate if args.target_gate is None else args.target_gate
         if aux["gate_means"].numel() > 0 and args.sparsity_reg > 0:
@@ -136,10 +175,33 @@ def main() -> None:
         else:
             loss_reg = torch.zeros((), device=device, dtype=loss_kl.dtype)
         if args.diversity_reg > 0:
-            loss_div = diversity_loss(student.routers[0].queries)
+            loss_div = router_diversity_loss(student.routers)
         else:
             loss_div = torch.zeros((), device=device, dtype=loss_kl.dtype)
-        loss = loss_kl + args.sparsity_reg * loss_reg + args.diversity_reg * loss_div
+        if args.block_distill_weight > 0 and "block_hidden" in aux:
+            t_hid = t_out.hidden_states
+            block_hidden = aux["block_hidden"]
+            losses_blk = []
+            for i, s_h in enumerate(block_hidden):
+                layer_idx = (i + 1) * args.block_size
+                if layer_idx >= len(t_hid):
+                    break
+                t_h = t_hid[layer_idx]
+                mask = attn.unsqueeze(-1).float()
+                mse = ((s_h.float() - t_h.float()) ** 2 * mask).sum()
+                denom = mask.sum().clamp_min(1.0) * s_h.size(-1)
+                mse = mse / denom
+                losses_blk.append(mse)
+            loss_block = sum(losses_blk) / max(len(losses_blk), 1)
+        else:
+            loss_block = torch.zeros((), device=device, dtype=loss_kl.dtype)
+
+        loss = (
+            loss_kl
+            + args.sparsity_reg * loss_reg
+            + args.diversity_reg * loss_div
+            + args.block_distill_weight * loss_block
+        )
 
         optimizer.zero_grad()
         loss.backward()
@@ -150,14 +212,16 @@ def main() -> None:
         losses_kl.append(loss_kl.item())
         losses_reg.append(loss_reg.item())
         losses_div.append(loss_div.item())
+        losses_block.append(loss_block.item())
         if step % args.log_every == 0:
             avg = sum(losses[-args.log_every:]) / args.log_every
             avg_kl = sum(losses_kl[-args.log_every:]) / args.log_every
             avg_reg = sum(losses_reg[-args.log_every:]) / args.log_every
             avg_div = sum(losses_div[-args.log_every:]) / args.log_every
+            avg_blk = sum(losses_block[-args.log_every:]) / args.log_every
             print(
                 f"step {step:>6d}/{args.steps} | loss {avg:.4f} | kl {avg_kl:.4f} | "
-                f"reg {avg_reg:.4f} | div {avg_div:.4f} | {time.time() - t0:.1f}s"
+                f"reg {avg_reg:.4f} | div {avg_div:.4f} | blk {avg_blk:.4f} | {time.time() - t0:.1f}s"
             )
 
         if step % args.save_every == 0 or step == args.steps:
@@ -170,6 +234,7 @@ def main() -> None:
                 "loss_kl": losses_kl[-1],
                 "loss_reg": losses_reg[-1],
                 "loss_div": losses_div[-1],
+                "loss_block": losses_block[-1],
             }
             if args.save_full_model:
                 ckpt["model_state"] = student.state_dict()

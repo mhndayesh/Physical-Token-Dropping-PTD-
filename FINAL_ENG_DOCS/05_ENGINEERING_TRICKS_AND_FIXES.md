@@ -5,12 +5,13 @@ Fixes included in actual_ptd
 - Attention mask is respected in the PTD path (token_mask is used throughout).
 - Causal mask is built from original position ids, not local indices.
 - RoPE uses the original positions for gathered tokens.
-- Cache path falls back to dense HF forward to preserve generation semantics.
+- Forward supports PTD sparse cache mode (`ptd_use_sparse_cache=True`) and keeps dense-cache fallback.
 
 Practical tricks used
 - Segment pooling: average only valid tokens to avoid padding bias.
 - Segment routing: route by segments instead of single tokens to reduce overhead.
 - Multi-query router: several queries compete to highlight different token types.
+- Transformer router option: small self-attention router for segment interactions.
 - Jitter noise in router scores to prevent deterministic early collapse.
 - Top-k selection uses scores.detach to avoid gradient leakage through selection.
 - Selection mask is tracked for selected-token loss and evaluation.
@@ -24,6 +25,6 @@ Stability choices
 - Selected-token loss in Phase 3 to avoid full-token penalty.
 
 Known limitations that remain
-- Sparse KV-cache for generation is not implemented.
+- PTD sparse cache decode is not bit-exact with full-sequence PTD forward (routing is per-step top-k).
 - Overhead of gather/scatter limits speedups at very low keep-rates.
 - The router is not yet optimized for long-context or extreme sparsity.

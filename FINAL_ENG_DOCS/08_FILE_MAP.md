@@ -4,7 +4,10 @@ Root
 - actual_ptd/ : current PTD V2 implementation (model, training, eval)
 - FINAL_ENG_DOCS/ : this documentation bundle
 - PTD_SCOREBOARD.md : evaluation results summary
-- LONG_CONTEXT_BATCH_REPORT_4K.md : long-context batch report (4K)
+- reports/cache_compare_4k_keep70.json : dense-cache vs PTD-cache (4K) raw output
+- reports/cache_compare_8k_keep70.json : dense-cache vs PTD-cache (8K) raw output
+- reports/kv_cache_report_4k.json : PTD no-cache vs PTD cache (4K) raw output
+- reports/kv_cache_report_8k.json : PTD no-cache vs PTD cache (8K) raw output
 - CORRECTIONS.md : known issues and fixes
 - TRAINING_GUIDE.md : legacy guide for older scripts
 - ptd_poc/ : original POC and blueprint documents
@@ -17,6 +20,10 @@ actual_ptd/
 - train_phase3.py : curriculum sparsity training
 - eval_perplexity.py : dense vs PTD PPL
 - eval_long_context.py : long-context single test (dense or PTD)
+- eval_hf_dataset.py : evaluate on HF datasets (WikiText-2, etc.)
+- profile_eval.py : torch.profiler wrapper for dense/PTD
+- eval_kv_cache.py : checks PTD cache correctness/perf
+- eval_cache_compare.py : dense-cache vs PTD-cache benchmark
 - prepare_long_test.py : builds fixed 4K/8K prompt packs
 - run_long_test.py : single run dense + PTD with metrics
 - run_long_test_batch.py : batch run across many chats/questions
@@ -31,3 +38,4 @@ ptd_poc/docs/
 
 FINAL_ENG_DOCS/
 - ROADMAP.md : suggested next steps and research ideas
+- CACHE_COMPARE_REPORT_2026-03-10.md : dense-cache vs PTD-cache final benchmark report

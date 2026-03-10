@@ -18,6 +18,9 @@ Loss used
 - loss_kl = KL( softmax(student/T) || softmax(teacher/T) ) * T^2
 - loss_reg = mean( (gate_mean - target_gate)^2 )
 - loss = loss_kl + sparsity_reg * loss_reg
+Optional block distillation
+- Adds MSE between student and teacher hidden states at block boundaries.
+- Controlled by --block-distill-weight in train_phase2.py.
 
 Notes
 - Soft gating is default (ste_gating=False). This allows dense gradient signal.
@@ -49,6 +52,10 @@ Optional coverage penalty
 Optional early-stop per stage
 - Enabled by --early-stop-window and --early-stop-delta.
 - If selected-loss plateaus between two windows, the stage ends early.
+
+Optional per-block keep rates
+- Use --per-block-keep to assign different base keep rates per block.
+- The stage keep-rate scales these values.
 
 Data
 - Current POC uses data/tinystories_packed_qwen.pt (TinyStories packed).

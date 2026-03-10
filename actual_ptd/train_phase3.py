@@ -26,6 +26,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--temperature", type=float, default=2.0)
     p.add_argument("--block-size", type=int, default=6)
     p.add_argument("--segment-size", type=int, default=16)
+    p.add_argument("--router-type", default="mq", choices=["mq", "transformer"])
+    p.add_argument("--router-rank", type=int, default=16)
+    p.add_argument("--router-queries", type=int, default=8)
+    p.add_argument("--router-dim", type=int, default=128)
+    p.add_argument("--router-heads", type=int, default=2)
+    p.add_argument("--router-layers", type=int, default=1)
+    p.add_argument(
+        "--per-block-keep",
+        default=None,
+        help="comma-separated keep rates per block (scaled by stage keep-rate)",
+    )
     p.add_argument("--save-every", type=int, default=500)
     p.add_argument("--log-every", type=int, default=50)
     p.add_argument(
@@ -75,6 +86,13 @@ def parse_schedule(s: str) -> List[float]:
     return vals
 
 
+def parse_keep_rates(s: str | None) -> List[float] | None:
+    if not s:
+        return None
+    vals = [float(x.strip()) for x in s.split(",") if x.strip()]
+    return vals or None
+
+
 def get_batch(data: torch.Tensor, batch: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
     idx = torch.randint(0, data.shape[0], (batch,))
     x = data[idx].to(device)
@@ -120,9 +138,34 @@ def coverage_penalty(segment_selection: torch.Tensor, window: int) -> torch.Tens
     return missing
 
 
+def coverage_penalty_soft(
+    segment_scores: torch.Tensor,
+    segment_valid: torch.Tensor | None,
+    window: int,
+) -> torch.Tensor:
+    if window <= 0:
+        return torch.zeros((), device=segment_scores.device, dtype=torch.float32)
+    if segment_scores.numel() == 0:
+        return torch.zeros((), device=segment_scores.device, dtype=torch.float32)
+    scores = segment_scores.float()
+    probs = torch.sigmoid(scores)
+    if segment_valid is not None and segment_valid.numel() > 0:
+        probs = probs * segment_valid.to(probs.dtype)
+    n_blocks, bsz, n_seg = probs.shape
+    pad = (window - (n_seg % window)) % window
+    if pad > 0:
+        pad_tensor = torch.zeros(n_blocks, bsz, pad, dtype=probs.dtype, device=probs.device)
+        probs = torch.cat([probs, pad_tensor], dim=-1)
+        n_seg = probs.size(-1)
+    probs = probs.view(n_blocks, bsz, n_seg // window, window)
+    prob_none = (1.0 - probs).clamp(1e-6, 1.0).prod(dim=-1)
+    return prob_none.mean()
+
+
 def main() -> None:
     args = parse_args()
     schedule = parse_schedule(args.schedule)
+    base_keep_rates = parse_keep_rates(args.per_block_keep)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
@@ -138,6 +181,13 @@ def main() -> None:
         block_size=args.block_size,
         segment_size=args.segment_size,
         keep_rate=schedule[0],
+        keep_rates=base_keep_rates,
+        router_type=args.router_type,
+        router_rank=args.router_rank,
+        router_queries=args.router_queries,
+        router_dim=args.router_dim,
+        router_heads=args.router_heads,
+        router_layers=args.router_layers,
         drop_tokens=True,
         ste_gating=True,
     )
@@ -186,7 +236,10 @@ def main() -> None:
     for stage_idx, keep_rate in enumerate(schedule):
         if stage_idx < start_stage:
             continue
-        student.set_keep_rate(keep_rate)
+        if base_keep_rates:
+            student.set_keep_rates(base_keep_rates, scale=keep_rate)
+        else:
+            student.set_keep_rate(keep_rate)
         student.set_drop_tokens(True)
         print(f"\nStage {stage_idx + 1}/{len(schedule)} | keep={keep_rate:.0%}")
 
@@ -220,7 +273,14 @@ def main() -> None:
                 mask_loss=True,
             )
             loss = loss_sel if args.mask_loss else loss_full
-            loss_cov = coverage_penalty(aux["segment_selection"], args.coverage_window)
+            if aux.get("segment_scores") is not None and aux["segment_scores"].numel() > 0:
+                loss_cov = coverage_penalty_soft(
+                    aux["segment_scores"],
+                    aux.get("segment_valid"),
+                    args.coverage_window,
+                )
+            else:
+                loss_cov = coverage_penalty(aux["segment_selection"], args.coverage_window)
             if args.coverage_weight > 0:
                 loss = loss + args.coverage_weight * loss_cov
 

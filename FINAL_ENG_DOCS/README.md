@@ -14,6 +14,11 @@ Contents
 - 06_REPRO_COMMANDS.md
 - 07_LIMITATIONS_AND_NEXT_STEPS.md
 - 08_FILE_MAP.md
+- CACHE_COMPARE_REPORT_2026-03-10.md
 
 Quick summary
 PTD (Physical Token Dropping) selects a subset of tokens inside each block, runs attention and MLP only on that subset, and scatters the results back. This reduces compute and memory, trading off some accuracy. The current implementation is in actual_ptd/ and uses a 2-phase training pipeline with a curriculum on keep-rate.
+
+Latest cache benchmark summary (Qwen2.5-0.5B, keep=70%)
+- 4K: same accuracy as dense on this sample, 44% lower total time, 64% lower peak VRAM.
+- 8K: ~4.76 points lower accuracy, 72% lower total time, 86% lower peak VRAM.
