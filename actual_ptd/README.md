@@ -13,6 +13,16 @@ This directory is a fresh implementation built from the repo concepts, with clea
 - `model.py`: `PTDQwen2ForCausalLM` + `PTDConfig`.
 - `train_phase2.py`: Router warm-up (soft routing, no physical drop).
 - `train_phase3.py`: Curriculum sparsity with full-model training.
+- `prepare_business_dataset.py`: JSONL to tensor dataset with critical/recent masks.
+- `train_phase2_business.py`: Business/domain warm-up with critical and recent penalties.
+- `train_phase3_business.py`: Business/domain sparsity curriculum with coverage penalty.
+- `train_full_production.py`: Orchestrator for prepare -> phase2 -> phase3.
+- `serve_prefill_dense.py`: Deployment path using sparse prefill + dense decode.
+- `eval_business_replay.py`: Replay scorer for critical field recall.
+- `prepare_general_hf_dataset.py`: Build general-purpose train/eval JSONL from Hugging Face datasets.
+- `data_quality_report.py`: Data quality checks for JSONL before training.
+- `compare_dense_vs_ptd.py`: Dense vs PTD quality/latency/VRAM benchmark.
+- `benchmark_long_context.py`: Long-context dense vs PTD benchmark (4k/8k/16k...).
 - `eval_perplexity.py`: Dense vs PTD perplexity check.
 - `eval_long_context.py`: Long-context eval (dense or PTD).
 - `eval_hf_dataset.py`: Evaluate on Hugging Face datasets (e.g., WikiText-2).
@@ -27,6 +37,50 @@ This directory is a fresh implementation built from the repo concepts, with clea
 Latest benchmark (Qwen2.5-0.5B, keep=70%)
 - 4K: same accuracy as dense on this sample, 44% lower total time, 64% lower peak VRAM.
 - 8K: 4.76 points lower accuracy, 72% lower total time, 86% lower peak VRAM.
+
+## Production Bridge Commands (One Line)
+
+Create data folders:
+
+```powershell
+New-Item -ItemType Directory -Force data,checkpoints,logs | Out-Null
+```
+
+Build general training JSONL from Hugging Face:
+
+```powershell
+python -m actual_ptd.prepare_general_hf_dataset --dataset HuggingFaceFW/fineweb-edu --config sample-10BT --train-out data/general_train_prod.jsonl --eval-out data/general_eval_prod.jsonl --train-examples 120000 --eval-examples 5000 --eval-ratio 0.04 --min-chars 220 --max-chars 2400 --min-words 40
+```
+
+Quality check:
+
+```powershell
+python -m actual_ptd.data_quality_report --input-jsonl data/general_train_prod.jsonl --model Qwen/Qwen2.5-0.5B --seq-len 512
+```
+
+Full production loop:
+
+```powershell
+python -m actual_ptd.train_full_production --model Qwen/Qwen2.5-0.5B --train-jsonl data/general_train_prod.jsonl --eval-jsonl data/general_eval_prod.jsonl --train-pt data/general_train_prod.pt --eval-pt data/general_eval_prod.pt --seq-len 512 --recent-window 64 --phase2-steps 3000 --phase2-batch 1 --phase2-keep-rate 0.5 --phase2-critical-weight 0.0 --phase2-recent-weight 0.2 --phase3-schedule 0.99,0.9,0.8,0.7 --phase3-steps-per-stage 1500 --phase3-batch 1 --phase3-critical-weight 0.0 --phase3-recent-weight 0.2 --phase3-coverage-weight 0.1 --save-every 250 --log-every 50
+```
+
+Serve with sparse prefill + dense decode:
+
+```powershell
+python -m actual_ptd.serve_prefill_dense --model Qwen/Qwen2.5-0.5B --checkpoint checkpoints/ptd_prod_phase3_stage4_keep70.pt --prompt "Explain PTD in simple terms." --keep-rate 0.7 --recent-window 64 --max-new-tokens 160
+```
+
+Benchmark dense vs PTD:
+
+```powershell
+python -m actual_ptd.compare_dense_vs_ptd --input-jsonl data/restaurant_eval.jsonl --model Qwen/Qwen2.5-0.5B --checkpoint checkpoints/ptd_prod_phase3_stage4_keep70.pt --keep-rate 0.7 --recent-window 64 --max-examples 10 --max-new-tokens 96 --out-json logs/dense_vs_ptd_results_10.json
+```
+
+Long-context benchmark:
+
+```powershell
+python -m actual_ptd.benchmark_long_context --model Qwen/Qwen2.5-0.5B --checkpoint checkpoints/ptd_prod_phase3_stage4_keep70.pt --source-jsonl data/general_train.jsonl --lengths 4096,8192 --max-new-tokens 32 --keep-rate 0.7 --recent-window 64 --out-json logs/long_context_dense_vs_ptd_4k_8k.json
+```
 
 ## Commands
 

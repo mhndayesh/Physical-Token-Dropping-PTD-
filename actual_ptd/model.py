@@ -25,6 +25,10 @@ class PTDConfig:
     router_jitter: float = 0.01
     drop_tokens: bool = True
     ste_gating: bool = True
+    prefill_only: bool = False
+    recent_window_tokens: int = 128
+    router_confidence_threshold: float = 0.55
+    max_protected_ratio: float = 0.85
 
 
 class MultiQueryRouter(nn.Module):
@@ -287,6 +291,31 @@ def _segment_pool(
     return pooled, seg_valid
 
 
+def _topk_with_mandatory(
+    scores: torch.Tensor,
+    valid_mask: torch.Tensor,
+    mandatory_mask: Optional[torch.Tensor],
+    keep_rate: float,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    bsz, n_seg = scores.shape
+    base_k = max(1, int(n_seg * keep_rate))
+    if mandatory_mask is None:
+        mandatory_mask = torch.zeros_like(valid_mask, dtype=torch.bool)
+    mandatory_mask = mandatory_mask & valid_mask
+    max_mandatory = int(mandatory_mask.sum(dim=-1).max().item()) if mandatory_mask.numel() > 0 else 0
+    k_sel = max(base_k, max_mandatory)
+    k_sel = min(max(1, k_sel), n_seg)
+    boosted = scores.masked_fill(~valid_mask, torch.finfo(scores.dtype).min)
+    if mandatory_mask.any():
+        boosted = boosted + mandatory_mask.to(boosted.dtype) * 1e6
+    _, topk_idx = torch.topk(boosted.detach(), k_sel, dim=-1)
+    topk_idx, _ = torch.sort(topk_idx, dim=-1)
+    sel = torch.zeros(bsz, n_seg, dtype=torch.bool, device=scores.device)
+    sel.scatter_(1, topk_idx, True)
+    sel = sel & valid_mask
+    return topk_idx, sel
+
+
 class PTDQwen2ForCausalLM(nn.Module):
     def __init__(self, base_model: Qwen2ForCausalLM, ptd: PTDConfig) -> None:
         super().__init__()
@@ -387,6 +416,23 @@ class PTDQwen2ForCausalLM(nn.Module):
     def set_drop_tokens(self, drop_tokens: bool) -> None:
         self.ptd.drop_tokens = drop_tokens
 
+    def set_prefill_only(self, prefill_only: bool) -> None:
+        self.ptd.prefill_only = prefill_only
+
+    def set_recent_window(self, recent_window_tokens: int) -> None:
+        self.ptd.recent_window_tokens = max(0, int(recent_window_tokens))
+
+    def should_fallback(self, aux: Dict[str, torch.Tensor]) -> bool:
+        conf = aux.get("router_confidence")
+        if conf is not None and conf.numel() > 0:
+            if float(conf.float().mean().item()) < float(self.ptd.router_confidence_threshold):
+                return True
+        protected_ratio = aux.get("protected_ratio")
+        if protected_ratio is not None and protected_ratio.numel() > 0:
+            if float(protected_ratio.float().mean().item()) > float(self.ptd.max_protected_ratio):
+                return True
+        return False
+
     def init_ptd_cache(self) -> PTDSparseCache:
         return PTDSparseCache(n_blocks=len(self.layer_groups), block_size=self.ptd.block_size)
 
@@ -402,6 +448,8 @@ class PTDQwen2ForCausalLM(nn.Module):
         return_block_hidden: bool = False,
         use_cache: bool = False,
         ptd_cache: Optional["PTDSparseCache"] = None,
+        mandatory_keep_mask: Optional[torch.Tensor] = None,
+        force_keep_last_n: int = 0,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         if (input_ids is None) == (inputs_embeds is None):
             raise ValueError("Specify exactly one of input_ids or inputs_embeds.")
@@ -430,11 +478,25 @@ class PTDQwen2ForCausalLM(nn.Module):
         if use_cache and ptd_cache is None:
             raise ValueError("use_cache=True requires ptd_cache for PTD sparse caching.")
 
+        if mandatory_keep_mask is None:
+            mandatory_keep_mask = torch.zeros(bsz, seq_len, dtype=torch.bool, device=device)
+        else:
+            mandatory_keep_mask = mandatory_keep_mask.to(device=device, dtype=torch.bool)
+        force_keep_last_n = max(force_keep_last_n, int(getattr(self.ptd, "recent_window_tokens", 0)))
+        if force_keep_last_n > 0:
+            last_tok = token_mask.sum(dim=-1).clamp_min(1)
+            for bi in range(bsz):
+                end = int(last_tok[bi].item())
+                start = max(0, end - force_keep_last_n)
+                mandatory_keep_mask[bi, start:end] = True
+        mandatory_keep_mask = mandatory_keep_mask & token_mask
+
         seg_size = self.ptd.segment_size
         selection_mask = torch.zeros(bsz, seq_len, dtype=torch.bool, device=device)
         gate_means = []
         segment_selections = []
         router_entropies = []
+        router_confidences = []
         segment_scores = []
         segment_valids = []
         block_hidden = [] if return_block_hidden else None
@@ -460,17 +522,27 @@ class PTDQwen2ForCausalLM(nn.Module):
             n_pad = x_pad.size(1)
             n_seg = n_pad // seg_size_cur
             pooled, seg_valid = _segment_pool(x_pad, m_pad, n_seg, seg_size_cur)
-            seg_scores, seg_ix = router.score(pooled, valid_mask=seg_valid)
+            if pad_len > 0:
+                mandatory_pad = F.pad(mandatory_keep_mask, (0, pad_len), value=False)
+            else:
+                mandatory_pad = mandatory_keep_mask
+            mandatory_seg = mandatory_pad.view(bsz, n_seg, seg_size_cur).any(dim=-1)
+            seg_scores, _ = router.score(pooled, valid_mask=seg_valid)
+            seg_ix, seg_selected = _topk_with_mandatory(
+                seg_scores,
+                seg_valid,
+                mandatory_seg,
+                keep_rate=router.keep_rate,
+            )
             segment_scores.append(seg_scores)
             segment_valids.append(seg_valid)
-            seg_selected = torch.zeros(bsz, n_seg, dtype=torch.bool, device=device)
-            seg_selected.scatter_(1, seg_ix, torch.ones_like(seg_ix, dtype=torch.bool))
             segment_selections.append(seg_selected)
 
-            scores_f = seg_scores.float()
+            scores_f = seg_scores.float().masked_fill(~seg_valid, -1e9)
             probs = torch.softmax(scores_f, dim=-1)
             entropy = -(probs * probs.clamp_min(1e-9).log()).sum(dim=-1).mean()
             router_entropies.append(entropy)
+            router_confidences.append((probs * seg_selected.float()).sum(dim=-1).mean())
 
             tok_ix = (
                 seg_ix.unsqueeze(-1) * seg_size_cur + torch.arange(seg_size_cur, device=device)
@@ -611,6 +683,13 @@ class PTDQwen2ForCausalLM(nn.Module):
                 if router_entropies
                 else torch.empty(0, device=device, dtype=torch.float32)
             ),
+            "router_confidence": (
+                torch.stack(router_confidences)
+                if router_confidences
+                else torch.empty(0, device=device, dtype=torch.float32)
+            ),
+            "mandatory_keep_mask": mandatory_keep_mask,
+            "protected_ratio": mandatory_keep_mask.float().sum(dim=-1) / token_mask.float().sum(dim=-1).clamp_min(1.0),
         }
         if return_block_hidden:
             aux["block_hidden"] = block_hidden
@@ -627,6 +706,8 @@ class PTDQwen2ForCausalLM(nn.Module):
         return_block_hidden: bool = False,
         use_cache: bool = False,
         ptd_cache: Optional["PTDSparseCache"] = None,
+        mandatory_keep_mask: Optional[torch.Tensor] = None,
+        force_keep_last_n: int = 0,
     ) -> Tuple[CausalLMOutputWithPast, Dict[str, torch.Tensor]]:
         hidden, aux = self._forward_hidden_with_aux(
             input_ids=input_ids,
@@ -636,6 +717,8 @@ class PTDQwen2ForCausalLM(nn.Module):
             return_block_hidden=return_block_hidden,
             use_cache=use_cache,
             ptd_cache=ptd_cache,
+            mandatory_keep_mask=mandatory_keep_mask,
+            force_keep_last_n=force_keep_last_n,
         )
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         logits = self.base_model.lm_head(hidden[:, slice_indices, :])
@@ -656,6 +739,42 @@ class PTDQwen2ForCausalLM(nn.Module):
         )
         return out, aux
 
+    @torch.no_grad()
+    def generate_prefill_dense(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        mandatory_keep_mask: Optional[torch.Tensor] = None,
+        force_keep_last_n: int = 0,
+        **generate_kwargs: Any,
+    ) -> torch.LongTensor:
+        if input_ids.dim() != 2 or input_ids.size(0) != 1:
+            raise ValueError("generate_prefill_dense currently supports batch size 1 only.")
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+        _, aux = self.forward_with_aux(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            mandatory_keep_mask=mandatory_keep_mask,
+            force_keep_last_n=force_keep_last_n,
+        )
+        if self.should_fallback(aux):
+            return self.base_model.generate(input_ids=input_ids, attention_mask=attention_mask, **generate_kwargs)
+        sel = aux["selection_mask"]
+        if mandatory_keep_mask is not None:
+            sel = sel | mandatory_keep_mask.to(sel.device, dtype=torch.bool)
+        if force_keep_last_n > 0:
+            end = int(attention_mask[0].sum().item())
+            start = max(0, end - force_keep_last_n)
+            sel[:, start:end] = True
+        compact = input_ids[0][sel[0]]
+        compact_mask = torch.ones_like(compact, dtype=attention_mask.dtype)
+        return self.base_model.generate(
+            input_ids=compact.unsqueeze(0),
+            attention_mask=compact_mask.unsqueeze(0),
+            **generate_kwargs,
+        )
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -671,6 +790,8 @@ class PTDQwen2ForCausalLM(nn.Module):
     ) -> CausalLMOutputWithPast:
         ptd_cache = kwargs.pop("ptd_cache", None)
         ptd_use_sparse_cache = bool(kwargs.pop("ptd_use_sparse_cache", False))
+        mandatory_keep_mask = kwargs.pop("mandatory_keep_mask", None)
+        force_keep_last_n = int(kwargs.pop("force_keep_last_n", 0))
         if isinstance(past_key_values, PTDSparseCache):
             ptd_cache = past_key_values
             ptd_use_sparse_cache = True
@@ -687,6 +808,8 @@ class PTDQwen2ForCausalLM(nn.Module):
                 logits_to_keep=logits_to_keep,
                 use_cache=True if use_cache is None else bool(use_cache),
                 ptd_cache=ptd_cache,
+                mandatory_keep_mask=mandatory_keep_mask,
+                force_keep_last_n=force_keep_last_n,
             )
             return out
 
@@ -712,5 +835,7 @@ class PTDQwen2ForCausalLM(nn.Module):
             inputs_embeds=inputs_embeds,
             labels=labels,
             logits_to_keep=logits_to_keep,
+            mandatory_keep_mask=mandatory_keep_mask,
+            force_keep_last_n=force_keep_last_n,
         )
         return out

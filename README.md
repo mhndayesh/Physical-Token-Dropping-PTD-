@@ -23,6 +23,8 @@ Detailed benchmark report:
 
 - PTD V2 code and commands: [actual_ptd](actual_ptd)
 - PTD V2 usage guide: [actual_ptd/README.md](actual_ptd/README.md)
+- Production bridge guide (prefill prune + dense decode): [docs/PRODUCTION_BRIDGE.md](docs/PRODUCTION_BRIDGE.md)
+- One-line production commands: [TRAINING_COMMANDS.md](TRAINING_COMMANDS.md)
 - Engineering docs index: [FINAL_ENG_DOCS/README.md](FINAL_ENG_DOCS/README.md)
 - Evaluation summary: [FINAL_ENG_DOCS/04_EVALUATION_AND_RESULTS.md](FINAL_ENG_DOCS/04_EVALUATION_AND_RESULTS.md)
 - Sparse training scoreboard: [PTD_SCOREBOARD.md](PTD_SCOREBOARD.md)
@@ -48,6 +50,8 @@ Detailed benchmark report:
 - Base model: `Qwen/Qwen2.5-0.5B`
 - Training: Phase 2 router warm-up + Phase 3 sparsity curriculum
 - Inference: Dense cache, PTD sparse cache, and long-context tests
+- Production bridge: protected sparse prefill + dense decode path (`actual_ptd/serve_prefill_dense.py`)
+- End-to-end practical loop: `actual_ptd/train_full_production.py`
 
 ## Hugging Face Package (Keep 70)
 
