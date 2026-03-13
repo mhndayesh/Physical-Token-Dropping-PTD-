@@ -24,6 +24,7 @@ Detailed benchmark report:
 - PTD V2 code and commands: [actual_ptd](actual_ptd)
 - PTD V2 usage guide: [actual_ptd/README.md](actual_ptd/README.md)
 - Production bridge guide (prefill prune + dense decode): [docs/PRODUCTION_BRIDGE.md](docs/PRODUCTION_BRIDGE.md)
+- Old vs new workflow report: [docs/OLD_VS_NEW_WORKFLOW.md](docs/OLD_VS_NEW_WORKFLOW.md)
 - One-line production commands: [TRAINING_COMMANDS.md](TRAINING_COMMANDS.md)
 - Engineering docs index: [FINAL_ENG_DOCS/README.md](FINAL_ENG_DOCS/README.md)
 - Evaluation summary: [FINAL_ENG_DOCS/04_EVALUATION_AND_RESULTS.md](FINAL_ENG_DOCS/04_EVALUATION_AND_RESULTS.md)
