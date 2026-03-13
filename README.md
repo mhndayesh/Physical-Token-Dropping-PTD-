@@ -3,7 +3,32 @@
 PTD is a sparse transformer approach that keeps only top-scored token segments during block execution.
 This repository contains a working PTD V2 implementation on **Qwen2.5-0.5B (0.5B model)** with training and evaluation code.
 
-## End Results (Qwen2.5-0.5B, Keep=70%, KV-Cache Inference)
+## Latest Production Update (Qwen2.5-0.5B, Keep70, 2026-03-14)
+
+Current production path uses **sparse prefill + dense decode** (`serve_prefill_dense.py`) with safety fallback.
+
+Dense vs PTD production-bridge snapshot:
+
+| Test | Dense | PTD Bridge | Net |
+| --- | --- | --- | --- |
+| Replay (10 samples) mean latency | `1.9674s` | `1.9729s` | almost equal |
+| Replay (10 samples) critical recall | `0.425` | `0.500` | PTD +`0.075` |
+| 4K context latency | `1.6097s` | `1.1198s` | PTD about `1.44x` faster |
+| 4K context peak VRAM | `4150.69 MB` | `4234.99 MB` | PTD +`84 MB` |
+| 8K context latency | `22.9846s` | `25.7360s` | PTD slower on this run |
+| 8K context peak VRAM | `10527.85 MB` | `8580.28 MB` | PTD saves `1947.57 MB` (~`18.5%`) |
+
+What this means:
+- New way improves deployment safety and control (mandatory keep masks, recent-window protection, fallback checks).
+- Speedup is workload-dependent; memory savings become more visible on longer contexts.
+- This is a practical production bridge, not a mathematically exact PTD-to-dense state handoff.
+
+Production references:
+- [docs/PRODUCTION_BRIDGE.md](docs/PRODUCTION_BRIDGE.md)
+- [docs/OLD_VS_NEW_WORKFLOW.md](docs/OLD_VS_NEW_WORKFLOW.md)
+- [TRAINING_COMMANDS.md](TRAINING_COMMANDS.md)
+
+## Research Cache-Mode Results (Earlier Benchmark)
 
 Dense vs PTD cache-mode comparison on the same long-context test:
 
